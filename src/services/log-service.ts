@@ -194,3 +194,126 @@ export async function queryLogs(
    
 } 
 
+export type AggregateQuery = {
+  service?: string;
+  level?: "debug" | "info" | "warn" | "error";
+  since: string;
+  until: string;
+  bucket: "1m" | "5m" | "1h" | "1d";
+  groupBy?: "service" | "level";
+  attributes?: Record<string, string>;
+  q?: string;
+};
+
+export type AggregateRow = {
+  start: string;
+  group: string | null;
+  count: number;
+};
+
+export async function aggregateLogs(
+  query: AggregateQuery,
+): Promise<AggregateRow[]> {
+  const conditions: string[] = [];
+  const values: unknown[] = [];
+
+  let parameterIndex = 1;
+
+  conditions.push(`timestamp >= $${parameterIndex}`);
+  values.push(query.since);
+  parameterIndex++;
+
+  conditions.push(`timestamp < $${parameterIndex}`);
+  values.push(query.until);
+  parameterIndex++;
+
+  if (query.service !== undefined) {
+    conditions.push(`service = $${parameterIndex}`);
+    values.push(query.service);
+    parameterIndex++;
+  }
+
+  if (query.level !== undefined) {
+    conditions.push(`level = $${parameterIndex}`);
+    values.push(query.level);
+    parameterIndex++;
+  }
+
+  if (query.q !== undefined) {
+    conditions.push(`message ILIKE $${parameterIndex}`);
+    values.push(`%${query.q}%`);
+    parameterIndex++;
+  }
+
+  if (query.attributes) {
+    for (const [key, value] of Object.entries(query.attributes)) {
+      conditions.push(
+        `attributes @> $${parameterIndex}::jsonb`,
+      );
+
+      values.push(
+        JSON.stringify({
+          [key]: value,
+        }),
+      );
+
+      parameterIndex++;
+    }
+  }
+
+  let bucketExpression: string;
+
+  switch (query.bucket) {
+    case "1m":
+      bucketExpression = `date_trunc('minute', timestamp)`;
+      break;
+
+    case "5m":
+      bucketExpression = `
+        date_trunc('hour', timestamp)
+        + floor(extract(minute from timestamp) / 5) * interval '5 minutes'
+      `;
+      break;
+
+    case "1h":
+      bucketExpression = `date_trunc('hour', timestamp)`;
+      break;
+
+    case "1d":
+      bucketExpression = `date_trunc('day', timestamp)`;
+      break;
+  }
+
+  let groupExpression: string | null = null;
+
+  if (query.groupBy === "service") {
+    groupExpression = "service";
+  } else if (query.groupBy === "level") {
+    groupExpression = "level";
+  }
+
+  const whereClause = `WHERE ${conditions.join(" AND ")}`;
+
+  const selectGroupExpression =
+    groupExpression ?? "NULL::text";
+
+  const groupByClause = groupExpression
+    ? `GROUP BY ${bucketExpression}, ${groupExpression}`
+    : `GROUP BY ${bucketExpression}`;
+
+  const result = await pool.query<AggregateRow>(
+    `
+      SELECT
+        ${bucketExpression} AS start,
+        ${selectGroupExpression} AS "group",
+        COUNT(*)::int AS count
+      FROM logs
+      ${whereClause}
+      ${groupByClause}
+      ORDER BY start ASC, "group" ASC
+    `,
+    values,
+  );
+
+  return result.rows;
+}
