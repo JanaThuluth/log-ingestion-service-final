@@ -3,6 +3,7 @@ import { logEntrySchema } from "../schemas/logs";
 import {
   insertLogs,
   queryLogs,
+  aggregateLogs,
 } from "../services/log-service";
 
 export async function logsRoutes(app: FastifyInstance) {
@@ -206,6 +207,96 @@ export async function logsRoutes(app: FastifyInstance) {
     return reply.status(200).send({
       logs: result.logs,
       next_cursor: nextCursor,
+    });
+  });
+
+  app.get("/logs/aggregate", async (request, reply) => {
+    const query = request.query as Record<string, string | undefined>;
+
+    if (
+      query.since === undefined ||
+      query.until === undefined ||
+      query.bucket === undefined
+    ) {
+      return reply.status(400).send({
+        error: "since, until, and bucket are required",
+      });
+    }
+
+    const parsedSince = new Date(query.since);
+    const parsedUntil = new Date(query.until);
+
+    if (Number.isNaN(parsedSince.getTime())) {
+      return reply.status(400).send({
+        error: "invalid since timestamp",
+      });
+    }
+
+    if (Number.isNaN(parsedUntil.getTime())) {
+      return reply.status(400).send({
+        error: "invalid until timestamp",
+      });
+    }
+
+    if (parsedUntil < parsedSince) {
+      return reply.status(400).send({
+        error: "until must not be earlier than since",
+      });
+    }
+
+    if (!["1m", "5m", "1h", "1d"].includes(query.bucket)) {
+      return reply.status(400).send({
+        error: "invalid bucket",
+      });
+    }
+
+    if (
+      query.group_by !== undefined &&
+      !["service", "level"].includes(query.group_by)
+    ) {
+      return reply.status(400).send({
+        error: "invalid group_by",
+      });
+    }
+
+    if (
+      query.level !== undefined &&
+      !["debug", "info", "warn", "error"].includes(query.level)
+    ) {
+      return reply.status(400).send({
+        error: `invalid level: '${query.level}'`,
+      });
+    }
+
+    const attributes: Record<string, string> = {};
+
+    for (const [key, value] of Object.entries(query)) {
+      if (key.startsWith("attr.") && value !== undefined) {
+        attributes[key.slice(5)] = value;
+      }
+    }
+
+    const buckets = await aggregateLogs({
+      since: parsedSince.toISOString(),
+      until: parsedUntil.toISOString(),
+      bucket: query.bucket as "1m" | "5m" | "1h" | "1d",
+      service: query.service,
+      level: query.level as
+        | "debug"
+        | "info"
+        | "warn"
+        | "error"
+        | undefined,
+      groupBy: query.group_by as
+        | "service"
+        | "level"
+        | undefined,
+      attributes,
+      q: query.q,
+    });
+
+    return reply.status(200).send({
+      buckets,
     });
   });
 }
