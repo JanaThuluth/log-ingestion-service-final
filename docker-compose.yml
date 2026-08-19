@@ -2,10 +2,30 @@ services:
   postgres:
     image: postgres:18
     container_name: logs-postgres
+    cpus: "1.0"
+    mem_limit: 1g
     environment:
       POSTGRES_USER: logs_user
       POSTGRES_PASSWORD: logs_password
       POSTGRES_DB: logs_db
+    command: >
+      postgres
+      -c wal_level=minimal
+      -c max_wal_senders=0
+      -c wal_buffers=16MB
+      -c max_wal_size=2GB
+      -c checkpoint_timeout=15min
+      -c checkpoint_completion_target=0.9
+      -c autovacuum_naptime=10s
+      -c autovacuum_vacuum_scale_factor=0.05
+      -c shared_buffers=256MB
+      -c effective_cache_size=768MB
+      -c work_mem=16MB
+      -c maintenance_work_mem=64MB
+      -c synchronous_commit=off
+      -c fsync=off
+      -c full_page_writes=off
+      -c max_connections=100
     ports:
       - "5432:5432"
     volumes:
@@ -15,10 +35,18 @@ services:
       interval: 2s
       timeout: 5s
       retries: 15
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1GB
 
   app:
     build: .
     container_name: logs-app
+    restart: unless-stopped
+    cpus: "0.5"
+    mem_limit: 256m
     ports:
       - "8080:8080"
     environment:
@@ -28,6 +56,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
 
 volumes:
   postgres_data:
