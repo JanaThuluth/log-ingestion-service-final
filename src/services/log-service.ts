@@ -1,4 +1,3 @@
-import { from as copyFrom } from "pg-copy-streams";
 import { pool } from "../db/pool";
 import type { LogEntry } from "../schemas/logs";
 
@@ -30,26 +29,28 @@ export type QueryLogsResult = {
   hasMore: boolean;
 };
 
-// escape فقط لما يكون فيه فاصلة/اقتباس/سطر جديد بالقيمة — بدل ما نلف
-// كل قيمة بـ "" ونشغّل regex بغض النظر عن محتواها. هاد بيوفر عبء CPU
-// محسوس على المسار الساخن (لغاية 4000 لوج × عدة حقول بكل دفعة)، مهم
-// لأنه التطبيق عنده 0.5 CPU بس مشترك مع خدمة طلبات القراءة بنفس الوقت.
-function escapeCsv(value: string): string {
-  if (
-      value.indexOf('"') === -1 &&
-      value.indexOf(',') === -1 &&
-      value.indexOf('\n') === -1 &&
-      value.indexOf('\r') === -1
-  ) {
-    return value;
-  }
-  return `"${value.replace(/"/g, '""')}"`;
-}
-
 function truncateToMinuteISO(isoTimestamp: string): string {
   const d = new Date(isoTimestamp);
   d.setUTCSeconds(0, 0);
   return d.toISOString();
+}
+
+function buildLogsInsertParams(entries: LogEntry[]) {
+  const timestamps: string[] = [];
+  const levels: string[] = [];
+  const services: string[] = [];
+  const messages: string[] = [];
+  const attributes: string[] = [];
+
+  for (const log of entries) {
+    timestamps.push(log.timestamp);
+    levels.push(log.level);
+    services.push(log.service);
+    messages.push(log.message);
+    attributes.push(JSON.stringify(log.attributes || {}));
+  }
+
+  return { timestamps, levels, services, messages, attributes };
 }
 
 function buildRollupUpsertRows(
@@ -101,47 +102,15 @@ async function insertLogsInternal(logs: LogEntry[]): Promise<number> {
       try {
         await client.query("BEGIN");
 
-        const copyStream = client.query(
-            copyFrom(`
-            COPY logs (
-              timestamp,
-              level,
-              service,
-              message,
-              attributes
-            )
-            FROM STDIN WITH (FORMAT csv)
-          `),
+        const { timestamps, levels, services, messages, attributes } = buildLogsInsertParams(logs);
+        await client.query(
+            `INSERT INTO logs (timestamp, level, service, message, attributes)
+           SELECT t::timestamptz, l, s, m, a::jsonb
+           FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[], $5::text[])
+           AS x(t, l, s, m, a);`,
+            [timestamps, levels, services, messages, attributes],
         );
 
-        for (const log of logs) {
-          // timestamp وlevel مضمونين الشكل (ISO 8601 / enum ثابت) —
-          // بدون أي حاجة لفحص escaping عليهم إطلاقًا
-          const row = [
-            log.timestamp,
-            log.level,
-            escapeCsv(log.service),
-            escapeCsv(log.message),
-            escapeCsv(JSON.stringify(log.attributes)),
-          ].join(",");
-
-          if (!copyStream.write(`${row}\n`)) {
-            await new Promise<void>((resolve, reject) => {
-              copyStream.once("drain", resolve);
-              copyStream.once("error", reject);
-            });
-          }
-        }
-
-        copyStream.end();
-
-        await new Promise<void>((resolve, reject) => {
-          copyStream.once("finish", resolve);
-          copyStream.once("error", reject);
-        });
-
-        // تحديث rollup بنفس الـ transaction — يضمن تزامن ذري كامل مع اللوجز
-        // الخام: إما الاثنان ينكتبوا سوا، أو ما ينكتب أي منهم
         const rollupRows = buildRollupUpsertRows(logs);
 
         if (rollupRows.length > 0) {
@@ -185,9 +154,8 @@ async function insertLogsInternal(logs: LogEntry[]): Promise<number> {
 }
 
 // ============================================================
-// Ingest batching queue — يجمع طلبات POST /logs المتزامنة بترانزاكشن
-// COPY أكبر بدل ما كل request يفتح transaction/COPY منفصل. بيقلل ضغط
-// الـ pool وعدد الـ round-trips تحت حمل عالي (15k-45k logs/s).
+// Ingest batching queue — نفس منطق Mohammad-Sheikh-Qasem/Log-Ingestion-and-Query-Service
+// حرفيًا (نفس الأرقام: TARGET_FLUSH_SIZE=4000, MAX_CONCURRENT_FLUSHES=3)
 // ============================================================
 
 interface PendingInsert {
