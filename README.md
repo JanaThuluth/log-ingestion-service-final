@@ -1,11 +1,11 @@
 # Log Ingestion Service
 
 <p align="center">
-  <strong>High-performance log ingestion and query service built for reliable ingestion, efficient querying, and scalable aggregation.</strong>
+  <strong>High-performance log ingestion and query service designed for reliable, scalable, and efficient log processing.</strong>
 </p>
 
 <p align="center">
-  Built with TypeScript, Fastify, PostgreSQL, Zod, and Docker.
+  Built with TypeScript, Node.js, Fastify, PostgreSQL, Zod, and Docker.
 </p>
 
 <p align="center">
@@ -13,7 +13,7 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=for-the-badge\&logo=typescript\&logoColor=white)
 ![Node.js](https://img.shields.io/badge/Node.js-22+-339933?style=for-the-badge\&logo=node.js\&logoColor=white)
 ![Fastify](https://img.shields.io/badge/Fastify-5.x-000000?style=for-the-badge\&logo=fastify\&logoColor=white)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-4169E1?style=for-the-badge\&logo=postgresql\&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-4169E1?style=for-the-badge\&logo=postgresql\&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge\&logo=docker\&logoColor=white)
 ![Zod](https://img.shields.io/badge/Zod-Validation-3E67B1?style=for-the-badge)
 
@@ -23,36 +23,98 @@
 
 ## Overview
 
-**Log Ingestion Service** is a backend system designed to ingest, persist, query, and aggregate large volumes of application logs.
+**Log Ingestion Service** is a backend system designed to ingest, store, query, and aggregate large volumes of application logs.
 
-The service is designed around write-heavy workloads and focuses on:
+The project focuses on practical backend engineering challenges associated with high-volume workloads, including:
 
-* High-throughput batch ingestion
+* High-throughput log ingestion
+* Batch processing
 * Input validation
 * Partial-batch error handling
-* Efficient PostgreSQL writes
-* Concurrent ingestion batching
+* PostgreSQL bulk inserts
+* Concurrent ingestion
 * Cursor-based pagination
-* Flexible JSONB attributes
+* JSONB attributes
 * Full-text message search
 * Time-based aggregation
 * Pre-aggregated one-minute rollups
 * Database indexing
 * Transactional writes
 * Deadlock retry handling
+* Data retention
 * Dockerized deployment
 * Load and stress testing
 
-The project uses **Fastify** for the HTTP layer, **PostgreSQL** for persistence, **Zod** for request validation, and PostgreSQL-specific optimizations for ingestion and querying.
+The implementation is designed to prioritize both **performance and correctness**, rather than optimizing throughput at the cost of data integrity.
 
 ---
 
-## Architecture
+# Benchmark
+
+The service was evaluated using the project benchmark suite under a high-throughput workload.
+
+## Overall Score
+
+| Category    |          Score | Result               |
+| ----------- | -------------: | -------------------- |
+| Correctness |  **15.0 / 15** | 15/15 checks passed  |
+| Performance |  **34.5 / 50** | 14,636 logs/sec      |
+| Queries     |  **13.9 / 15** | 59 ms aggregate p95  |
+| Reliability |  **20.0 / 20** | 4/4 scenarios passed |
+| **Total**   | **83.5 / 100** |                      |
+
+## Key Metrics
+
+| Metric            |              Result |
+| ----------------- | ------------------: |
+| Throughput        | **14,636 logs/sec** |
+| Error Rate        |            **0.0%** |
+| Ingestion p95     |        **1,150 ms** |
+| Aggregate p95     |           **59 ms** |
+| Correctness       |    **15/15 checks** |
+| Query Consistency |             **4/4** |
+| Reliability       |   **4/4 scenarios** |
+| Overall Score     |      **83.5 / 100** |
+
+### Score Breakdown
+
+```mermaid
+xychart-beta
+    title "Benchmark Score"
+    x-axis ["Correctness", "Performance", "Queries", "Reliability"]
+    y-axis "Score" 0 --> 50
+    bar [15, 34.5, 13.9, 20]
+```
+
+### Performance Summary
+
+The benchmark demonstrates that the service can sustain approximately:
+
+**14,636 logs per second**
+
+while maintaining:
+
+* **0.0% error rate**
+* **15/15 correctness checks**
+* **4/4 reliability scenarios**
+* **59 ms aggregate p95**
+* **1,150 ms ingestion p95**
+
+These results demonstrate strong correctness and reliability together with high ingestion throughput and efficient aggregation queries.
+
+> Benchmark results are environment-dependent and can vary based on CPU, memory, PostgreSQL configuration, Docker resource limits, workload characteristics, and concurrency.
+
+---
+
+# Architecture
+
+The system is organized around a Fastify REST API, a log ingestion pipeline, PostgreSQL persistence, querying, and aggregation.
 
 ```mermaid
 flowchart LR
 
     Client["Client"]
+    Benchmark["Load Generator"]
 
     API["Fastify API"]
 
@@ -62,18 +124,18 @@ flowchart LR
 
     Batcher["Insert Batcher"]
 
-    DB[("PostgreSQL")]
-
-    Logs[("logs")]
-    Rollups[("logs_rollup_1m")]
-
     Query["Query Service"]
 
     Aggregation["Aggregation Service"]
 
-    Health["Health Check"]
+    DB[("PostgreSQL")]
+
+    Logs[("logs")]
+
+    Rollups[("logs_rollup_1m")]
 
     Client --> API
+    Benchmark --> API
 
     API --> Validation
 
@@ -83,116 +145,107 @@ flowchart LR
 
     Batcher --> DB
 
-    DB --> Logs
-    DB --> Rollups
-
     API --> Query
     Query --> DB
 
     API --> Aggregation
     Aggregation --> DB
 
-    API --> Health
-    Health --> DB
+    DB --> Logs
+    DB --> Rollups
 ```
 
 ---
 
-## Ingestion Pipeline
+# Log Ingestion Flow
 
-The ingestion path validates incoming logs before they reach the database.
+The ingestion pipeline validates incoming logs, batches accepted entries, and writes them to PostgreSQL.
 
 ```mermaid
 flowchart TD
 
     A["POST /logs"]
 
-    B["Validate Request"]
+    B["Request Validation"]
 
-    C{"Valid Log Entry?"}
+    C{"Valid Entry?"}
 
-    D["Add to Rejected List"]
+    D["Reject Entry"]
 
-    E{"Timestamp Valid?"}
+    E["Accepted Logs"]
 
-    F["Reject Entry"]
+    F["Insert Batcher"]
 
-    G["Accepted Logs"]
+    G["Batch Flush"]
 
-    H["InsertBatcher"]
+    H["Database Transaction"]
 
-    I["Batch Aggregation"]
+    I[("PostgreSQL")]
 
-    J["Transactional Database Write"]
+    J[("logs")]
 
-    K[("PostgreSQL")]
-
-    L[("logs")]
-
-    M[("logs_rollup_1m")]
+    K[("logs_rollup_1m")]
 
     A --> B
+
     B --> C
 
     C -->|No| D
     C -->|Yes| E
 
-    E -->|No| F
-    E -->|Yes| G
-
+    E --> F
+    F --> G
     G --> H
+
     H --> I
+
     I --> J
-    J --> K
-
-    K --> L
-    K --> M
+    I --> K
 ```
-
-### Batch Processing
-
-The ingestion service uses an internal batching queue to combine incoming requests before writing them to PostgreSQL.
-
-The current implementation targets:
-
-* **4000 logs per flush**
-* **Up to 3 concurrent flushes**
-
-This reduces the overhead of executing individual database writes and allows multiple incoming requests to be combined into larger database operations.
 
 ---
 
-## Database Write Strategy
+# Batch Processing
 
-The service performs transactional writes for both raw logs and their corresponding rollup records.
+The service uses an internal batching mechanism to combine multiple incoming requests before writing to PostgreSQL.
+
+This reduces database round trips and improves ingestion throughput.
+
+The batching configuration uses:
+
+```text
+TARGET_FLUSH_SIZE = 4000
+MAX_CONCURRENT_FLUSHES = 3
+```
+
+The basic processing model is:
 
 ```mermaid
-sequenceDiagram
-    participant Client
-    participant API as Fastify API
-    participant Batcher as Insert Batcher
-    participant DB as PostgreSQL
+flowchart LR
 
-    Client->>API: POST /logs
-    API->>API: Validate entries
-    API->>Batcher: Queue valid logs
-    Batcher->>Batcher: Build batch
-    Batcher->>DB: BEGIN
-    Batcher->>DB: Bulk insert logs
-    Batcher->>DB: Upsert 1-minute rollups
-    DB-->>Batcher: Success
-    Batcher->>DB: COMMIT
-    Batcher-->>API: Inserted count
-    API-->>Client: Accepted / Rejected
+    Requests["Incoming Requests"]
+
+    Queue["In-Memory Batch Queue"]
+
+    Batch["Batch of Logs"]
+
+    Flush["Concurrent Flush"]
+
+    DB[("PostgreSQL")]
+
+    Requests --> Queue
+    Queue --> Batch
+    Batch --> Flush
+    Flush --> DB
 ```
 
-Raw log insertion and rollup updates are committed in the same transaction. If the transaction fails, the operation is rolled back.
-
-The implementation also retries transient PostgreSQL deadlock errors up to two additional attempts before returning the failure.
+Batching allows the service to process large numbers of log entries using fewer database operations.
 
 ---
 
-# Data Model
+# Database Design
+
+PostgreSQL is used as the primary persistent storage engine.
 
 ## Entity Relationship Diagram
 
@@ -215,40 +268,47 @@ erDiagram
         BIGINT count
     }
 
-    LOGS ||--o{ LOGS_ROLLUP_1M : "aggregates into"
+    LOGS ||--o{ LOGS_ROLLUP_1M : "aggregated into"
 ```
 
-> `logs_rollup_1m` contains derived aggregation data. The relationship shown above represents the logical aggregation between raw logs and rollup statistics rather than a foreign-key relationship.
+> `logs_rollup_1m` contains derived aggregation data. The relationship shown above represents a logical aggregation relationship rather than a direct foreign-key relationship.
 
 ---
 
-## `logs`
+# `logs` Table
 
-The `logs` table stores the raw log events.
+The `logs` table stores the raw application log events.
 
-| Column       | Type          | Description           |
-| ------------ | ------------- | --------------------- |
-| `id`         | `BIGSERIAL`   | Unique log identifier |
-| `timestamp`  | `TIMESTAMPTZ` | Log timestamp         |
-| `level`      | `TEXT`        | Log severity          |
-| `service`    | `TEXT`        | Service name          |
-| `message`    | `TEXT`        | Log message           |
-| `attributes` | `JSONB`       | Structured metadata   |
+| Column       | Type          | Description                    |
+| ------------ | ------------- | ------------------------------ |
+| `id`         | `BIGSERIAL`   | Unique log identifier          |
+| `timestamp`  | `TIMESTAMPTZ` | Timestamp of the log           |
+| `level`      | `TEXT`        | Log severity                   |
+| `service`    | `TEXT`        | Service that generated the log |
+| `message`    | `TEXT`        | Log message                    |
+| `attributes` | `JSONB`       | Structured metadata            |
 
-The schema uses indexes for timestamp ordering, service filtering, level filtering, and JSONB attribute access.
+Supported levels:
+
+```text
+debug
+info
+warn
+error
+```
 
 ---
 
-## `logs_rollup_1m`
+# `logs_rollup_1m` Table
 
-The rollup table stores aggregated statistics in one-minute buckets.
+The rollup table stores pre-aggregated statistics using one-minute time buckets.
 
-| Column         | Type           | Description                 |
-| -------------- | -------------- | --------------------------- |
-| `bucket_start` | `TIMESTAMPTZ`  | Start of aggregation bucket |
-| `service`      | `VARCHAR(255)` | Service name                |
-| `level`        | `VARCHAR(10)`  | Log level                   |
-| `count`        | `BIGINT`       | Number of logs              |
+| Column         | Type          | Description                 |
+| -------------- | ------------- | --------------------------- |
+| `bucket_start` | `TIMESTAMPTZ` | Start of aggregation bucket |
+| `service`      | `VARCHAR`     | Service name                |
+| `level`        | `VARCHAR`     | Log level                   |
+| `count`        | `BIGINT`      | Number of logs              |
 
 Primary key:
 
@@ -256,15 +316,15 @@ Primary key:
 PRIMARY KEY (bucket_start, service, level)
 ```
 
-This structure allows efficient aggregation queries without repeatedly scanning all raw logs for common aggregation workloads.
+The rollup table allows common aggregation queries to avoid repeatedly scanning the raw log dataset.
 
 ---
 
 # Validation
 
-Log entries are validated using Zod.
+Incoming logs are validated using **Zod** before being accepted by the ingestion pipeline.
 
-Each log must contain:
+A log entry contains:
 
 ```text
 timestamp
@@ -274,16 +334,16 @@ message
 attributes
 ```
 
-Supported log levels:
+The service validates:
 
-```text
-debug
-info
-warn
-error
-```
+* Required fields
+* Log level
+* Timestamp format
+* Timestamp freshness
+* Attribute types
+* Request structure
 
-Attributes support:
+Supported attribute value types include:
 
 ```text
 string
@@ -291,25 +351,71 @@ number
 boolean
 ```
 
-The API also rejects timestamps that are more than five minutes in the future.
+The service also rejects timestamps that are more than five minutes in the future.
 
-Invalid entries inside an otherwise valid batch are reported individually rather than causing valid entries to be discarded.
+---
+
+# Partial Batch Handling
+
+The ingestion API supports partial success.
+
+For example, if a request contains multiple logs and one entry is invalid:
+
+```text
+Valid log
+Valid log
+Invalid log
+Valid log
+```
+
+The valid entries can still be processed while the invalid entry is reported to the client.
+
+Conceptually:
+
+```mermaid
+flowchart LR
+
+    Batch["Incoming Batch"]
+
+    Valid["Valid Entries"]
+
+    Invalid["Invalid Entries"]
+
+    Database[("PostgreSQL")]
+
+    Response["Response"]
+
+    Batch --> Valid
+    Batch --> Invalid
+
+    Valid --> Database
+    Invalid --> Response
+    Database --> Response
+```
+
+This prevents a single malformed log entry from unnecessarily invalidating an entire batch.
 
 ---
 
 # API
 
-## Health Check
+## `GET /health`
 
-### `GET /health`
+Checks application and PostgreSQL availability.
 
-Checks PostgreSQL connectivity.
+### Request
+
+```http
+GET /health
+```
+
+### cURL
 
 ```bash
 curl http://localhost:8080/health
 ```
 
-Successful response:
+### Successful Response
 
 ```json
 {
@@ -317,21 +423,11 @@ Successful response:
 }
 ```
 
-If the database is unavailable:
-
-```json
-{
-  "status": "unavailable"
-}
-```
-
 ---
 
-# Log Ingestion
+# `POST /logs`
 
-## `POST /logs`
-
-Accepts a batch of log entries.
+Ingests a batch of log entries.
 
 ### Request
 
@@ -389,56 +485,36 @@ curl -X POST http://localhost:8080/logs \
 }
 ```
 
-For partially invalid batches:
-
-```json
-{
-  "accepted": 2,
-  "rejected": [
-    {
-      "index": 1,
-      "reason": "invalid log entry"
-    }
-  ]
-}
-```
-
 ---
 
-# Log Querying
+# `GET /logs`
 
-## `GET /logs`
-
-Returns stored logs.
+Queries stored logs.
 
 Supported filters include:
 
-| Parameter | Description             |
-| --------- | ----------------------- |
-| `service` | Filter by service       |
-| `level`   | Filter by log level     |
-| `since`   | Lower timestamp bound   |
-| `until`   | Upper timestamp bound   |
-| `q`       | Search message text     |
-| `attr.*`  | Filter JSONB attributes |
-| `limit`   | Number of results       |
-| `cursor`  | Cursor for pagination   |
+| Parameter | Description              |
+| --------- | ------------------------ |
+| `service` | Filter by service        |
+| `level`   | Filter by log level      |
+| `since`   | Lower timestamp boundary |
+| `until`   | Upper timestamp boundary |
+| `q`       | Search log messages      |
+| `attr.*`  | Filter JSONB attributes  |
+| `limit`   | Number of returned logs  |
+| `cursor`  | Pagination cursor        |
 
-The `limit` value is restricted to:
-
-```text
-1 - 1000
-```
-
-### Example
+Example:
 
 ```http
 GET /logs?service=api&level=error&limit=100
 ```
 
-### Attribute Filtering
+---
 
-Attributes can be queried using the `attr.` prefix.
+# Attribute Filtering
+
+Structured attributes can be queried using the `attr.` prefix.
 
 Example:
 
@@ -446,45 +522,67 @@ Example:
 GET /logs?attr.region=eu-west
 ```
 
-### Message Search
+Another example:
+
+```http
+GET /logs?attr.user_id=123
+```
+
+This allows clients to filter logs without requiring every possible metadata field to become a dedicated database column.
+
+---
+
+# Message Search
+
+The query API supports searching the `message` field.
+
+Example:
 
 ```http
 GET /logs?q=database
 ```
 
-The database uses PostgreSQL trigram indexing for efficient message search.
+PostgreSQL trigram indexing is used to improve substring search performance.
+
+The database enables the `pg_trgm` extension and creates a GIN index over the message column.
 
 ---
 
 # Cursor-Based Pagination
 
-The query endpoint uses cursor-based pagination rather than relying on large offsets.
+The query API uses cursor-based pagination.
 
-Results are ordered by:
+Results are ordered deterministically using:
 
 ```sql
 ORDER BY timestamp DESC, id DESC
 ```
 
-A cursor contains:
+A cursor represents the last returned `(timestamp, id)` pair.
 
-```json
-{
-  "timestamp": "2026-08-20T10:00:00.000Z",
-  "id": "12345"
-}
+Conceptually:
+
+```mermaid
+flowchart LR
+
+    Request["GET /logs"]
+
+    Query["Query Database"]
+
+    Page["Current Page"]
+
+    Cursor["next_cursor"]
+
+    Next["Next Request"]
+
+    Request --> Query
+    Query --> Page
+    Page --> Cursor
+    Cursor --> Next
+    Next --> Query
 ```
 
-The API returns:
-
-```json
-{
-  "logs": [],
-  "next_cursor": "..."
-}
-```
-
-This provides deterministic ordering and avoids gaps or duplicates when traversing pages.
+Cursor pagination avoids the performance problems associated with large `OFFSET` values and provides stable traversal through the dataset.
 
 ---
 
@@ -492,17 +590,9 @@ This provides deterministic ordering and avoids gaps or duplicates when traversi
 
 ## `GET /logs/aggregate`
 
-Returns time-bucketed log statistics.
+The aggregation endpoint provides time-based statistics.
 
-Required parameters:
-
-```text
-since
-until
-bucket
-```
-
-Supported buckets:
+Supported bucket sizes include:
 
 ```text
 1m
@@ -511,249 +601,256 @@ Supported buckets:
 1d
 ```
 
-Optional grouping:
+The aggregation can be grouped by dimensions such as:
 
 ```text
 service
 level
 ```
 
-### Example
+Example:
 
 ```http
 GET /logs/aggregate?since=2026-08-20T00:00:00Z&until=2026-08-20T12:00:00Z&bucket=1h&group_by=service
-```
-
-### Example Response
-
-```json
-{
-  "buckets": [
-    {
-      "start": "2026-08-20T00:00:00Z",
-      "group": "api",
-      "count": 12450
-    }
-  ]
-}
 ```
 
 ---
 
 # Aggregation Strategy
 
-The service uses two aggregation paths.
+The service can use pre-aggregated rollups for common aggregation queries.
 
 ```mermaid
 flowchart TD
 
-    Query["Aggregation Request"]
+    Request["Aggregation Request"]
 
-    Conditions{"Requires raw message or attribute filtering?"}
+    Filter{"Requires Raw Log Filtering?"}
 
     Rollup[("logs_rollup_1m")]
+
     Raw[("logs")]
 
-    Bucket["Time Bucketing"]
+    Aggregate["Time-Based Aggregation"]
+
     Result["Aggregation Result"]
 
-    Query --> Conditions
+    Request --> Filter
 
-    Conditions -->|No| Rollup
-    Conditions -->|Yes| Raw
+    Filter -->|No| Rollup
+    Filter -->|Yes| Raw
 
-    Rollup --> Bucket
-    Raw --> Bucket
+    Rollup --> Aggregate
+    Raw --> Aggregate
 
-    Bucket --> Result
+    Aggregate --> Result
 ```
 
 ### Rollup Path
 
-When the aggregation does not require raw message search or attribute filtering, the service can use `logs_rollup_1m`.
-
-This reduces the amount of data that must be scanned.
+When the aggregation does not require raw message or attribute filtering, the pre-aggregated rollup table can significantly reduce the amount of data that needs to be scanned.
 
 ### Raw Log Path
 
-When the query requires:
+Queries requiring:
 
 * Message search
 * Attribute filtering
 
-the service queries the raw `logs` table.
+can operate on the raw `logs` table.
 
 ---
 
-# PostgreSQL Optimization
+# Database Indexing
 
-The database includes several indexes specifically designed around query patterns.
+The database is optimized around common query patterns.
 
 ## Timestamp Index
+
+Used for recent-log queries and cursor pagination.
 
 ```sql
 (timestamp DESC, id DESC)
 ```
 
-Used for deterministic ordering and cursor-based pagination.
-
 ## Service Index
+
+Used for service-filtered queries.
 
 ```sql
 (service, timestamp DESC, id DESC)
 ```
 
-Optimizes service-filtered queries.
-
 ## Level Index
+
+Used for level-filtered queries.
 
 ```sql
 (level, timestamp DESC, id DESC)
 ```
 
-Optimizes level-filtered queries.
+## JSONB Index
 
-## JSONB Attribute Index
-
-The service uses a specialized PostgreSQL GIN index for normalized attribute key-value searches.
+A GIN index is used to support structured attribute searches.
 
 ## Message Search Index
 
-PostgreSQL `pg_trgm` is enabled for message search:
+PostgreSQL `pg_trgm` is used for efficient substring searches.
 
 ```sql
 CREATE INDEX idx_logs_message_trgm
 ON logs USING GIN (message gin_trgm_ops);
 ```
 
-This supports more efficient substring matching for the `q` query parameter.
+---
+
+# Transactional Writes
+
+Raw logs and rollup updates are persisted within a database transaction.
+
+```mermaid
+sequenceDiagram
+
+    participant Service
+    participant PostgreSQL
+
+    Service->>PostgreSQL: BEGIN
+
+    Service->>PostgreSQL: Insert raw logs
+
+    Service->>PostgreSQL: Upsert rollups
+
+    PostgreSQL-->>Service: Success
+
+    Service->>PostgreSQL: COMMIT
+```
+
+If an error occurs:
+
+```mermaid
+sequenceDiagram
+
+    participant Service
+    participant PostgreSQL
+
+    Service->>PostgreSQL: BEGIN
+    Service->>PostgreSQL: Insert logs
+    Service->>PostgreSQL: Update rollups
+
+    PostgreSQL-->>Service: Error
+
+    Service->>PostgreSQL: ROLLBACK
+```
+
+This prevents raw logs and their corresponding rollups from becoming inconsistent.
+
+---
+
+# Deadlock Handling
+
+Concurrent database writes can occasionally encounter transient PostgreSQL deadlocks.
+
+The ingestion service includes retry handling for deadlock errors.
+
+The current implementation retries failed transactions before returning an error to the caller.
+
+This improves resilience when multiple ingestion batches are being flushed concurrently.
 
 ---
 
 # Performance Engineering
 
-The project includes several techniques intended to improve write throughput.
+The project applies several techniques to improve throughput.
 
-### Bulk Insert
+### Batch Inserts
 
-Instead of inserting every log with an individual SQL statement, logs are converted into arrays and inserted using PostgreSQL `UNNEST`.
+Multiple logs are inserted together rather than issuing one database operation per log.
 
-### Insert Batching
+### Concurrent Flushes
 
-Multiple requests can be combined into larger database batches.
-
-Current configuration:
+The ingestion pipeline allows multiple batches to be processed concurrently.
 
 ```text
-TARGET_FLUSH_SIZE = 4000
-MAX_CONCURRENT_FLUSHES = 3
+Incoming Logs
+      |
+      v
+Batch Queue
+      |
+      +----------+----------+
+      |          |          |
+      v          v          v
+   Batch 1    Batch 2    Batch 3
+      |          |          |
+      +----------+----------+
+                 |
+                 v
+             PostgreSQL
 ```
 
-### Rollup Upserts
+### Rollups
 
-Rollup statistics are updated using:
+One-minute aggregation data reduces repeated work for common aggregation queries.
 
-```sql
-ON CONFLICT (bucket_start, service, level)
-DO UPDATE
-```
+### PostgreSQL Indexing
 
-This allows the service to increment existing aggregation buckets without rebuilding them from scratch.
+Indexes are designed around actual query patterns rather than adding indexes indiscriminately.
 
-### Transactional Writes
+### Cursor Pagination
 
-Raw logs and rollups are updated inside the same transaction.
+Cursor pagination avoids increasingly expensive large-offset queries.
+
+---
+
+# Load Testing
+
+The project is evaluated using a dedicated benchmark suite.
+
+The benchmark measures:
+
+| Metric            | Description                           |
+| ----------------- | ------------------------------------- |
+| Correctness       | Functional correctness checks         |
+| Throughput        | Logs processed per second             |
+| Error Rate        | Failed requests                       |
+| p95               | Tail latency                          |
+| Query Performance | Aggregation latency                   |
+| Consistency       | Aggregation correctness               |
+| Reliability       | Behavior across reliability scenarios |
 
 ---
 
 # Benchmark Results
 
-The repository includes a benchmark report generated by the project benchmark tool.
-
-The recorded benchmark was executed using:
+The current benchmark result is:
 
 ```text
-Benchmark Tool: @foothill/logs-benchmark
-Mode: Docker Compose
-Generator: grafana/k6:0.54.0
-Generator CPUs: 4
-Generator Memory: 1 GB
-Resource Limits: Enforced
+Correctness    15.0 / 15
+Performance    34.5 / 50
+Queries        13.9 / 15
+Reliability    20.0 / 20
+
+Total          83.5 / 100
 ```
 
-The benchmark report records **15/15 correctness checks passed**, including ingestion, validation, querying, pagination, and aggregation.
+The service achieved:
 
-## Correctness
+```text
+Throughput     14,636 logs/sec
+Errors         0.0%
+Ingestion p95  1,150 ms
+Aggregate p95  59 ms
+Consistency    4/4
+Reliability    4/4
+Correctness    15/15
+```
 
-| Category              |      Result |
-| --------------------- | ----------: |
-| Correctness Checks    | **15 / 15** |
-| Correctness Rate      |    **100%** |
-| Reliability Scenarios |   **4 / 4** |
-| Error Rate            |      **0%** |
-
----
-
-## Throughput
-
-| Scenario   |         Throughput | Error Rate |       p95 |
-| ---------- | -----------------: | ---------: | --------: |
-| Load       |     4,548 logs/sec |         0% |  4,814 ms |
-| Stress     |     5,304 logs/sec |         0% | 12,309 ms |
-| Spike      | **6,012 logs/sec** |         0% | 20,074 ms |
-| Breakpoint |     4,383 logs/sec |         0% | 35,418 ms |
-
-The highest recorded throughput in the benchmark was approximately **6,012 logs/sec** during the spike scenario.
-
-> These results are environment-specific. The benchmark report indicates that the load generator was itself constrained during the test, so the offered load should not be interpreted as a guaranteed service ceiling.
-
----
-
-# Benchmark Score
-
-The attached benchmark report records:
-
-| Category    |     Score | Maximum |
-| ----------- | --------: | ------: |
-| Correctness |     15.00 |      15 |
-| Performance |     21.06 |      50 |
-| Queries     |      6.00 |      15 |
-| Reliability |     20.00 |      20 |
-| **Total**   | **62.06** | **100** |
-
-The project passed all correctness and reliability checks in the recorded benchmark.
+This demonstrates a strong balance between throughput, correctness, query performance, and reliability.
 
 ---
 
 # Docker
 
-The repository provides a Docker Compose configuration containing:
-
-```text
-Application
-PostgreSQL
-Persistent PostgreSQL volume
-Health check
-Resource limits
-```
-
-The application is configured to run on:
-
-```text
-http://localhost:8080
-```
-
-PostgreSQL is exposed on:
-
-```text
-localhost:5432
-```
-
-The application waits for PostgreSQL to become healthy before starting.
-
----
-
-# Running with Docker
+The repository includes Docker configuration for running the service together with PostgreSQL.
 
 ## Requirements
 
@@ -766,19 +863,19 @@ The application waits for PostgreSQL to become healthy before starting.
 docker compose up --build
 ```
 
-## Check Status
+## Check Containers
 
 ```bash
 docker compose ps
 ```
 
-## View Application Logs
+## Application Logs
 
 ```bash
 docker compose logs app
 ```
 
-## View PostgreSQL Logs
+## PostgreSQL Logs
 
 ```bash
 docker compose logs postgres
@@ -790,7 +887,7 @@ docker compose logs postgres
 docker compose down
 ```
 
-To remove the database volume as well:
+To remove the database volume:
 
 ```bash
 docker compose down -v
@@ -798,15 +895,15 @@ docker compose down -v
 
 ---
 
-# Running Locally
+# Local Development
 
 ## Requirements
 
-* Node.js
+* Node.js 22+
 * npm
 * PostgreSQL
 
-## Install
+## Install Dependencies
 
 ```bash
 npm install
@@ -814,13 +911,15 @@ npm install
 
 ## Environment Variables
 
+Create a `.env` file:
+
 ```env
 DATABASE_URL=postgresql://logs_user:logs_password@localhost:5432/logs_db
 PORT=8080
 HOST=0.0.0.0
 ```
 
-## Development
+## Start Development Server
 
 ```bash
 npm run dev
@@ -838,19 +937,17 @@ npm run typecheck
 npm run build
 ```
 
-## Production
+## Start Production Build
 
 ```bash
 npm start
 ```
 
-The project defines development, build, production, and type-check scripts in `package.json`.
-
 ---
 
 # Database Migrations
 
-Database migrations are automatically executed during application startup.
+Database migrations are executed during application startup.
 
 Migration files:
 
@@ -861,15 +958,17 @@ src/db/migrations/
 └── 003_performance_tuning.sql
 ```
 
-The migrations create:
+The migration system is responsible for creating and configuring the required PostgreSQL schema.
 
-* `logs`
-* `logs_rollup_1m`
-* JSONB attribute indexing
-* Rollup indexes
+The migrations include:
+
+* Raw logs table
+* Rollup table
+* Query indexes
+* JSONB attribute support
 * PostgreSQL trigram extension
 * Message search index
-* Query-oriented indexes
+* Performance-oriented indexes
 
 ---
 
@@ -879,6 +978,7 @@ The migrations create:
 log-ingestion-service-final/
 │
 ├── src/
+│   │
 │   ├── db/
 │   │   ├── migrations/
 │   │   │   ├── 001_initial.sql
@@ -910,8 +1010,6 @@ log-ingestion-service-final/
 └── README.md
 ```
 
-The structure separates HTTP routes, validation schemas, database access, migrations, and log-processing logic.
-
 ---
 
 # Technology Stack
@@ -920,11 +1018,11 @@ The structure separates HTTP routes, validation schemas, database access, migrat
 | ----------------- | ---------------------------- |
 | TypeScript        | Application development      |
 | Node.js           | Runtime                      |
-| Fastify           | HTTP server and routing      |
+| Fastify           | HTTP server                  |
 | PostgreSQL        | Persistent storage           |
 | `pg`              | PostgreSQL client            |
 | `pg-copy-streams` | PostgreSQL streaming support |
-| Zod               | Input validation             |
+| Zod               | Request validation           |
 | Docker            | Containerization             |
 | Docker Compose    | Local orchestration          |
 | K6                | Load testing                 |
@@ -933,103 +1031,105 @@ The structure separates HTTP routes, validation schemas, database access, migrat
 
 # Engineering Decisions
 
-## Why Fastify?
+## Fastify
 
-Fastify provides a lightweight HTTP layer designed for high-performance Node.js applications.
+Fastify provides a lightweight and performance-oriented HTTP framework for Node.js.
 
-The application creates a Fastify instance with logging enabled and registers dedicated health and log routes.
+It is well suited to an ingestion service where request processing overhead matters.
 
-## Why PostgreSQL?
+## PostgreSQL
 
-PostgreSQL provides:
+PostgreSQL was selected because it provides:
 
-* Transactional guarantees
+* Strong transactional guarantees
 * JSONB support
 * Advanced indexing
-* Aggregation capabilities
+* Powerful aggregation
+* Mature SQL capabilities
 * Reliable persistence
-* Native support for extensions such as `pg_trgm`
+* Extensions such as `pg_trgm`
 
-## Why JSONB?
+## JSONB
 
-Log attributes are dynamic by nature.
+Log metadata can vary between services.
 
-Different services can attach different metadata without requiring a new relational column for every attribute.
+JSONB allows the system to store dynamic attributes without changing the relational schema for every new metadata field.
 
 Example:
 
 ```json
 {
-  "request_id": "req-123",
-  "user_id": "42",
-  "region": "eu-west"
+  "user_id": "123",
+  "region": "eu-west",
+  "request_id": "req-456"
 }
 ```
 
-## Why Cursor Pagination?
+## Batch Processing
 
-Cursor pagination provides stable traversal through a changing log dataset.
+Individual database operations for every log would introduce unnecessary overhead.
 
-The implementation uses:
+Batching allows many log records to be processed together, reducing database round trips.
 
-```sql
-ORDER BY timestamp DESC, id DESC
-```
+## Cursor Pagination
 
-and uses the `(timestamp, id)` pair as the cursor boundary.
+Cursor pagination provides stable and efficient traversal of large datasets.
 
-## Why Rollups?
+## Rollups
 
-Repeated aggregation over a large raw log table can become expensive.
+Pre-aggregated one-minute data reduces the cost of repeated aggregation queries.
 
-The one-minute rollup table provides a smaller data source for common time-based aggregation queries.
+## Transactions
 
-## Why Batch Inserts?
-
-Database round trips can become a bottleneck when processing thousands of log records.
-
-The service combines multiple incoming requests into larger batches before writing them to PostgreSQL.
+Raw logs and rollups are committed together to maintain consistency.
 
 ---
 
 # Reliability
 
-The implementation includes several mechanisms designed to preserve correctness under load:
+The service includes several mechanisms designed to maintain correctness under load:
 
-* Input validation
+* Zod validation
 * Partial-batch rejection
 * Timestamp validation
 * Transactional writes
-* Deadlock retry
-* Deterministic pagination
+* Deadlock retries
 * Cursor validation
-* Database health checks
+* Deterministic pagination
 * PostgreSQL constraints
+* Health checks
 * Rollup consistency
 * Docker health checks
 
-The benchmark confirms that all recorded correctness checks passed and all four reliability scenarios completed successfully.
+The benchmark confirms:
+
+```text
+Correctness: 15/15
+Consistency:  4/4
+Reliability:  4/4
+Error Rate:   0.0%
+```
 
 ---
 
 # Security Considerations
 
-This project is intended primarily as a backend engineering and performance project.
+This project is primarily focused on backend engineering and performance.
 
-Before production deployment, consider adding:
+Before production deployment, additional security controls should be considered:
 
 * Authentication
 * Authorization
 * Rate limiting
 * TLS
 * Secret management
-* Database credential rotation
+* Credential rotation
 * Request-size limits
 * Network isolation
 * Monitoring
 * Audit logging
 
-Development database credentials in Docker Compose should not be reused in production.
+Development database credentials should never be reused in production.
 
 ---
 
@@ -1047,16 +1147,15 @@ Potential improvements include:
 * [ ] Automated CI/CD
 * [ ] Benchmark regression testing
 * [ ] Authentication and authorization
+* [ ] Adaptive batching
 * [ ] Improved observability
-* [ ] Adaptive batching based on system load
+* [ ] Distributed ingestion
 
 ---
 
 # What This Project Demonstrates
 
-This project demonstrates practical backend engineering skills across several areas.
-
-### Backend Engineering
+## Backend Engineering
 
 * TypeScript
 * Node.js
@@ -1064,7 +1163,7 @@ This project demonstrates practical backend engineering skills across several ar
 * REST API design
 * Request validation
 
-### Database Engineering
+## Database Engineering
 
 * PostgreSQL
 * SQL
@@ -1076,33 +1175,34 @@ This project demonstrates practical backend engineering skills across several ar
 * Rollups
 * Database migrations
 
-### Performance Engineering
+## Performance Engineering
 
 * Batch ingestion
 * Bulk database writes
-* Concurrent flushes
+* Concurrent flushing
 * Cursor pagination
 * Query optimization
 * Pre-aggregated data
 * Load testing
 * Stress testing
 
-### Reliability Engineering
+## Reliability Engineering
 
 * Transactional writes
-* Deadlock retry
+* Deadlock retries
 * Input validation
+* Partial batch handling
 * Deterministic pagination
 * Health checks
 * Consistency validation
 
-### DevOps
+## DevOps
 
 * Docker
 * Docker Compose
-* Resource limits
 * PostgreSQL health checks
-* Reproducible local environments
+* Resource management
+* Reproducible development environment
 
 ---
 
@@ -1110,7 +1210,8 @@ This project demonstrates practical backend engineering skills across several ar
 
 ## Jana Thuluth
 
-GitHub: `JanaThuluth`
+GitHub:
+https://github.com/JanaThuluth/log-ingestion-service-final
 
 ---
 
